@@ -1154,6 +1154,27 @@ describe("Sync", function(){
             
         });
     });
+
+    describe('.getAllDependencies', function(){
+        it('includes the key collection\'s sync', function(){
+            var keyCollection = new KeyCollection();
+            var testCollection2 = new TestCollection({key: keyCollection});
+
+            expect(testCollection2.storage.sync.getAllDependencies()[0] === keyCollection.storage.sync).toBeTruthy();
+            
+        });
+
+        it('includes the key collection\'s parent\'s sync', function(){
+            var keyCollection = new KeyCollection();
+            var testCollection2 = new TestCollection({key: keyCollection});
+            var testCollection3 = new TestCollection({key: testCollection2});
+            
+
+            expect(testCollection3.storage.sync.getAllDependencies()[0] === keyCollection.storage.sync).toBeTruthy();
+            
+        });
+        
+    });
     
 });
 

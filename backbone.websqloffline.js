@@ -386,7 +386,7 @@
     };
     Offline.Storage = Storage;
 
-    //Handles the synchronizaiton between client and server datastores
+    //Handles the synchronization between client and server datastores
     function Sync(collection, storage){
         this.collection = new Offline.Collection(collection);
         this.storage = storage;
@@ -417,7 +417,9 @@
         //Deletes all client side data and replaces it with server data indiscriminately 
         this.full = function(options){
             var that = this;
-            this.ajax('read', this.collection.items,
+
+            var helper = function(){
+                that.ajax('read', that.collection.items,
                       _.extend({},
                                options,
                                {success: function(model, response, opts){
@@ -441,20 +443,77 @@
                                    );
                                },
                                error: options.error})
-                     );
-                               
-                                       
-                                       
+                         );
+            };
+
+            if(options.ignoreDependencies){
+                helper();
+            } else {
+                this.syncDependencies({
+                    success: helper,
+                    error: options.error
+                });
+            }                       
+        };
+
+        this.getAllDependencies = function(){
+            // All of the storages of dependencies of this object, sorted in order of the keys, with duplicates removed.
+            // Removing duplicates should mean that collections required by multiple dependencies should be at the front of the list.
+            // This doesn't deal well with circular key dependencies.
+            var dependencies = _.values(this.storage.keys);
+            if(dependencies){
+                var nestedDeps = _.map(dependencies, function(coll){
+                    return coll.storage.sync.getAllDependencies();
+                });
+                nestedDeps.push(this);
+                return _.uniq(_.flatten(nestedDeps));
+            } else {
+                return [this];
+            }
+        };
+
+        this.syncDependencies = function(options){
+            var success = options.success || (function(){});
+            var dependencies = this.getAllDependencies();
+            dependencies.pop(); //Remove "this" from the list
+            if(dependencies.length > 0){
+                success = _.after(dependencies.length, success);
+                _.each(dependencies, function(sync){
+                    sync.incremental({
+                        success: success,
+                        ignoreDependencies: true,
+                        error: options.error
+                    });
+                });
+            } else {
+                success();
+            }
         };
 
         //Performs a pull/push incremental sync
         this.incremental = function(options){
             options = options || {};
+            var success = options.success || function(){};
+            delete options.success; //Don't want success callback called prematurely.
             var that = this;
+
+            var helper = function(){
+                that.pull(_.extend({}, options, {success: function(){
+                    options.success = success;
+                    that.push(options);
+                }}));  
+            };
             
-            this.pull(_.extend({}, options, {success: function(){
-                that.push(options.error);
-            }}));
+            if(options.ignoreDependencies){
+                helper();
+            } else {
+                this.syncDependencies({
+                    success: helper,
+                    error: options.error
+                });
+            }
+            
+            
         };
 
 
@@ -463,7 +522,8 @@
             options = options || {};
             var that = this;
 
-            this.ajax('read', this.collection.items, _.extend({}, options, {
+            var helper = function(){
+                that.ajax('read', that.collection.items, _.extend({}, options, {
                 success: function(model, response, opts){
                     that.collection.destroyDiff(response);
                     var itemCount = response.length;
@@ -477,6 +537,17 @@
                         });
                     }
                 }}));
+            };
+            
+            if(options.ignoreDependencies){
+                helper();
+            } else {
+                this.syncDependencies({
+                    success: helper,
+                    error: options.error
+                });
+            }
+            
             
         };
         
@@ -513,23 +584,48 @@
         };
 
         //Uploads dirty client side data and deleted items to the server
-        this.push = function(error){
+        this.push = function(options){
+            options = options || {};
             var that = this;
-            var pushingItems = this.collection.items.filter(function(item){return item.dirty == true;});
-            _.each(pushingItems,
-                   function(element, index, list){
-                       that.pushItem(element, error);
-                   });
-            
-            this.storage.deletedItems(function(recs){
-                for(var x = 0; x < recs.length; x++){
-                    that.flushItem(recs[x].id, recs[x].sid);
-                }
+            var error = options.error || function(){};
+            var success = options.success || function(){};
+
+            var helper = function(){
+                var pushingItems = that.collection.items.filter(function(item){return item.dirty == true;});
+                success = _.after(pushingItems.length + 1, success); //1 for the deletedItems call
+                _.each(pushingItems,
+                       function(element, index, list){
+                           that.pushItem(element, {
+                               error: error,
+                               success: success
+                           });
+                       });
                 
-            });
+                that.storage.deletedItems(function(recs){
+                    var newSuccess = _.after(recs.length, success); //Yes, that's right, two layers of _.after
+                    for(var x = 0; x < recs.length; x++){
+                        that.flushItem(recs[x].id, recs[x].sid, newSuccess);
+                    }
+                    
+                });
+            };
+
+            if(options.ignoreDependencies){
+                helper();
+            } else {
+                this.syncDependencies({
+                    success: helper,
+                    error: options.error
+                });
+            }
+            
+
         };
 
-        this.pushItem = function(item, error){
+        this.pushItem = function(item, options){
+            options = options || {};
+            var error = options.error || function() {};
+            var success = options.success || function() {};
             var oldAttrs = _.clone(item.attributes);
             var newItem = this.storage.replaceKeyFields(item, 'server', error);
             var localId = item.id;
@@ -561,18 +657,22 @@
                     response.id = localId;
                     item.id = localId;
                     item.dirty = false;
-                    item.save(response, {local: true});
+                    item.save(response, {local: true,
+                                         success: success});
+                    
                 }});
             
             
         };
 
         //Deletes data on the server and removes it from Web SQL
-        this.flushItem = function(id, sid){
+        this.flushItem = function(id, sid, success){
+            success = success || function() {};
             var model = this.collection.fakeModel(sid);
             this.ajax('delete', model, {
                 success: function(model, response, opts){
                     this.storage.remove(id);
+                    success();
                 }
             });
         };

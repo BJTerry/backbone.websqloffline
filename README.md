@@ -95,7 +95,7 @@ BlogPostCollection = Backbone.Collection.extend({
 });
 ````
 
-In this case, when the client downloads blog posts from the server, it will replace the user_id attribute of the blog posts (which is a server id for a user) with the client-side id of the user by looking it up in the collection. In this configuration it's recommended that the collection with the keys, (e.g. users) be synced before using the collection that uses the keys. Otherwise there could be conflicts with ids that are not found. There are two sources of conflict: new "users" won't have server-side ids and so you won't be able to properly upload the "blog posts," and if you download "blog posts" for "users" that aren't on the client, the system won't know what to replace them with. In these cases it will call the error handler with (model, text description of problem).
+In this case, when the client downloads blog posts from the server, it will replace the user_id attribute of the blog posts (which is a server id for a user) with the client-side id of the user by looking it up in the collection. Whenever a sync is done to a collection that has keys, all of the keys are first synced incrementally with the server recursively, to ensure that their are no problems with matching up keys. It is a bad idea to have cyclical key dependencies, as unexpected behavior could result.
 
 ## Contributing
 
