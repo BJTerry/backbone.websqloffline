@@ -90,7 +90,7 @@ BlogPostCollection = Backbone.Collection.extend({
     model: BlogPost,
     url: '/api/blog_posts',
     initialize: function(){
-        this.storage = new Offline.Storage('users', this, {user_id: users}});
+        this.storage = new Offline.Storage('users', this, {keys: {user_id: users}});
     }
 });
 ````

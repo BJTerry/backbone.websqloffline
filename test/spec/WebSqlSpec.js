@@ -385,8 +385,8 @@ describe("Storage", function(){
                     success: function(model, resp, options){
                         storage.findAll({
                             local: true,
-                            success: function(model, resp, options){
-                                sentinel = resp;
+                            success: function(collection, resp, options){
+                                sentinel = collection;
                             }
                         });
                         
@@ -414,7 +414,7 @@ describe("Storage", function(){
                                 storage.findAll({
                                     local: true,
                                     success: function(model, resp, options){
-                                        sentinel = resp;
+                                        sentinel = model;
                                     }
                                 });
                             }
@@ -448,25 +448,7 @@ describe("Storage", function(){
             });
             
         });
-        it('calls incremental sync if the table is not empty', function(){
-            spyOn(storage.sync, 'incremental');
 
-            runs(function(){
-                testCollection.create({Name: "Test Model"}, {
-                    success: function(model, resp, options){
-                        storage.findAll();
-                }});
-            });
-
-            waitsFor(function(){
-                return storage.sync.incremental.calls.length > 0;
-            });
-
-            runs(function(){
-                expect(storage.sync.incremental).toHaveBeenCalledWith(jasmine.any(Object));
-            });
-            
-        });
     });
 
     describe('.isEmpty', function(){
@@ -705,7 +687,7 @@ describe("Sync", function(){
             });
 
             runs(function(){
-                expect(error).toHaveBeenCalledWith(jasmine.any(Object), jasmine.any(Object), jasmine.any(Object));
+                expect(error).toHaveBeenCalled();
             });
         });
 
@@ -792,8 +774,8 @@ describe("Sync", function(){
                             success: function(){
                                 sync.createItem({id: 143}, function(){
                                     storage.findAll({
-                                        success: function(model, resp, options){
-                                            sentinel = resp.length;
+                                        success: function(coll, resp, options){
+                                            sentinel = coll.length;
                                         },
                                         local: true
                                     });
@@ -1043,7 +1025,7 @@ describe("Sync", function(){
             });
 
             waitsFor(function(){
-                return count == 1;
+                return count > 0;
             });
 
             runs(function(){
