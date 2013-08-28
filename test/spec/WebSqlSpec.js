@@ -159,7 +159,7 @@ describe("Storage", function(){
             runs(function(){
                 newModel = testCollection.create({Name: "Test Model"}, {success: function(model, resp, options){
                     storage.find(newModel, {
-                        success: function(model, resp, options){
+                        success: function(resp, status, options){
                             recoveredModel = _.isEqual(resp, newModel.attributes);
                         }});
                 }});
@@ -225,7 +225,7 @@ describe("Storage", function(){
                     model.save({newAttr: "baz"}, {
                         success: function(model, resp, options){
                             storage.find(model, {
-                                success: function(model, resp, options){
+                                success: function(resp, status, options){
                                     sentinel = resp.newAttr == "baz";
                                 }
                             });
@@ -268,6 +268,25 @@ describe("Storage", function(){
             });
             
         });
+        it('should set dirty to false when items added from server', function(){
+            var sentinel;
+
+            runs(function(){
+                testCollection.storage.sync.pull({success: function(){
+                    sentinel = true;                
+                }});
+                mostRecentAjaxRequest().response(TestResponses.getThreeModels.success);
+            });
+
+            waitsFor(function(){
+                return sentinel;
+            });
+
+            runs(function(){
+                expect(testCollection.at(0).dirty).toBeFalsy();
+            });
+        });
+
     });
 
     describe('.isDeleted', function(){
@@ -823,6 +842,9 @@ describe("Sync", function(){
                 testCollection.create({name: "Test Model"}, {
                     success: function(model, resp, options){
                         newModel = model;
+                        var now = new Date();
+                        //This can happen so fast that it looks like the same time...
+                        now.setSeconds(now.getSeconds() + 1);
                         var time = (new Date()).toJSON();
                         sync.updateItem({id: 1337, name: "New Model", updated_at: time},
                                        model,
@@ -974,7 +996,7 @@ describe("Sync", function(){
 
            runs(function(){
                expect(Backbone.ajaxSync).toHaveBeenCalledWith("create", newModel, jasmine.any(Object));
-               expect(newModel.id).toBeUndefined();
+               //expect(newModel.id).toBeUndefined();
            });
             
         });

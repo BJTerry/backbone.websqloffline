@@ -1,13 +1,14 @@
 // This is a library to use WebSQL to syncrhonize a local long-term datastore with a remote server
 
-(function(_, Backbone){
+(function(_, Backbone) {
+    "use strict";
     //Offline handles the dispatch to storage methods, and acts as a namespace for the other modules
     var Offline = {
-        localSync: function(method, model, options, store){
+        localSync: function(method, model, options, store) {
             var resp;
-            switch(method){
-              case 'read':
-                if(_.isUndefined(model.id)){
+            switch (method) {
+            case 'read':
+                if(_.isUndefined(model.id)) {
                     resp = store.findAll(options);
                 } else {
                     resp = store.find(model, options);
@@ -26,15 +27,16 @@
         },
         sync: function(method, model, options) {
             var store = model.storage || (model.collection ? model.collection.storage : undefined);
-            if(store && store.support)
+            if(store && store.support){
                 Offline.localSync(method, model, options, store);
-            else
+            } else {
                 Backbone.ajaxSync(method, model, options);
+            }
         },
 
-        onLine: function(){
+        onLine: function() {
             //This isn't supported in Firefox properly?
-            return window.navigator.onLine != false;
+            return window.navigator.onLine !== false;
         }
     };
 
@@ -46,7 +48,7 @@
     window.Offline = Offline;
     
     //Storage provides the interface to Web SQL
-    function Storage(name, collection, options){
+    function Storage(name, collection, options) {
         options = options || {};
         this.name = name;
         this.collection = collection;
@@ -55,90 +57,115 @@
         this.support = _.isFunction(window.openDatabase);
         this.sync = new Offline.Sync(collection, this);
 
-        if(!Storage.prototype.db)
-            Storage.prototype.db = openDatabase('bb-wsql', '1.0', 'Database for backbone.websqloffline', 1*1024*1024);
-        
+        if(!Storage.prototype.db){
+            Storage.prototype.db = openDatabase('bb-wsql', '1.0', 'Database for backbone.websqloffline', 1 * 1024 * 1024);
+        }
+
         this.db = Storage.prototype.db;
 
-        this.db.transaction(function(t){
-            t.executeSql("CREATE TABLE IF NOT EXISTS "+ name +" (id INTEGER PRIMARY KEY ASC, sid, dirty, updated_at, deleted, attributes)", [],
-                        function(t, r){
+        this.db.transaction(function(t) {
+            t.executeSql("CREATE TABLE IF NOT EXISTS " + name + " (id INTEGER PRIMARY KEY ASC, sid, dirty, updated_at, deleted, attributes)", [],
+                        function(t, r) {
                             return;
                         },
-                        function(t, e){
+                        function(t, e) {
                             return;
                         });
         });
-
-        this.setName = function(name){
+        //setName sets the database table name used for this storage. If that table already exists, the old table
+        //is discarded and the new table is used instead
+        this.setName = function(name) {
             var that = this;
-            if(name !== that.name){
-                this.db.transaction(function(t){
-                t.executeSql("ALTER TABLE " + this.name + " RENAME TO " + name, [],
-                             function(t, r){
-                                 that.name = name;
-                                 return;
-                             },
-                             function(t, e){
-                                 return;
-                             });
+            if(name !== that.name) {
+                this.db.transaction(function(t) {
+                    var oldName = that.name; 
+                    t.executeSql("SELECT name FROM sqlite_master WHERE type = ? AND name = ?", ['table', name],
+                        function(t, resultSet) {
+                            if(resultSet.rows.length === 1){
+                                //This table already exists. In this case we just switch to it, discarding the old table.
+                                that.name = name;
+                                t.executeSql("DROP TABLE " + oldName, [], function(){
+                                    return; 
+                                }, function(){
+                                    return; 
+                                });
+                            } else {
+                                //The new table doesn't already exist.
+                                t.executeSql("ALTER TABLE " + oldName + " RENAME TO " + name, [],
+                                    function(t, r) {
+                                        that.name = name;
+                                        return;
+                                    },
+                                    function(t, e) {
+                                        return;
+                                    });
+
+                            }   
+
+                        }, 
+                        function(t, e) {
+                            
+                        });
                 });  
             }
         };
 
-        this.create = function(model, options){
+        this.create = function(model, options) {
             options.regenerateId = true;
             this.save(model, options);
         },
         
-        this.update = function(model, options){
+        this.update = function(model, options) {
             this.save(model, options);
         },
 
-        this.destroy = function(model, options){
+        this.destroy = function(model, options) {
             //console.log("destroy: ", model, options);
 
             options = options || {};
-            var success = options.success || function(){};
-            var error = options.error || function(){};
-            var that = this;
+            var success = options.success || function() {},
+                error = options.error || function() {},
+                that = this;
             
-            if(options.local || model.sid === 'new'){
+            if(options.local || model.sid === 'new') {
                 //Just destroy from database immediately
                 this.remove(model, options);
             } else {
                 //Just set to deleted in the database
-                this.db.transaction(function(t){
-                    t.executeSql('UPDATE '+ that.name +' SET deleted = ? WHERE id = ?', [true, model.id],
-                                 function(t, resultSet){
-                                     model.deleted = true;
-                                     delete options.success;
-                                     success(model, "success", options);
-                                 },
-                                 function(t, e){
-                                     error(e);
-                                 });
+                this.db.transaction(function(t) {
+                    t.executeSql('UPDATE ' + that.name + ' SET deleted = ? WHERE id = ?', [true, model.id],
+                                 function(t, resultSet) {
+                                    model.deleted = true;
+                                    delete options.success;
+                                    success(model, "success", options);
+                                },
+                                 function(t, e) {
+                                    error(e);
+                                });
                 });                 
             }
         };
 
         //This function determines whether an item is awaiting deletion from the client-side
         //It is an error to call this function with an sid of "new."
-        this.isDeleted = function(sid, trueCallback, falseCallback){
+        this.isDeleted = function(sid, trueCallback, falseCallback) {
             //console.log("isDeleted: ", sid, trueCallback, falseCallback);
 
             var that = this;
-            if(sid == "new")
+            if(sid === "new"){
                 return;
-            
-            this.db.readTransaction(function(t){
-                t.executeSql('SELECT COUNT (*) AS c FROM '+ that.name +' WHERE sid = ? AND deleted = ?', [sid, true],
-                             function(t, resultSet){
-                                 if(resultSet.rows.item(0).c == 0)
-                                     falseCallback();
-                                 else
-                                     trueCallback();
-                             });
+            }   
+                            
+            this.db.readTransaction(function(t) {
+                t.executeSql('SELECT COUNT (*) AS c FROM ' + that.name + ' WHERE sid = ? AND deleted = ?', [sid, true],
+                    function(t, resultSet) {
+                        if(resultSet.rows.item(0).c === 0){
+                            falseCallback();
+                        }
+                        else{
+                            trueCallback();
+                        }
+                    });
             });
         },
 
@@ -148,19 +175,20 @@
         this.deletedItems = function(success, error){
             //console.log("deletedItems: ", success, error);
             var that = this;
-            this.db.readTransaction(function(t){
+            this.db.readTransaction(function(t) {
                 t.executeSql('SELECT id, sid FROM '+ that.name +' WHERE deleted = ?', [true],
-                             function(t, resultSet){
-                                 var rows = [];
-                                 for(var x = 0; x < resultSet.rows.length; x++){
-                                     rows.push(resultSet.rows.item(x));
-                                 }
-                                 success(rows);
-                             },
-                             function(t, e){
-                                 if(error)
-                                     error(e);
-                             });
+                            function(t, resultSet){
+                                var rows = [];
+                                for(var x = 0; x < resultSet.rows.length; x++){
+                                    rows.push(resultSet.rows.item(x));
+                                }
+                                success(rows);
+                            },
+                            function(t, e) {
+                                if(error){
+                                    error(e);
+                                }   
+                            });
             });
         },
 
@@ -174,19 +202,20 @@
             this.db.readTransaction(function(t){
                 t.executeSql('SELECT attributes FROM '+ that.name +' WHERE id = ? AND deleted = ?', [model.id, false],
                              function(t, resultSet){
-                                 if(resultSet.rows.length > 0){
-                                     var result = JSON.parse(resultSet.rows.item(0).attributes);
-                                     //id isn't included in the database attributes on first save
-                                     result.id = model.id;
-                                     delete options.success;
-                                     success(model, result, options);
-                                 }
-                                 else
-                                     error("Record not found");
-                             },
+                                    if(resultSet.rows.length > 0){
+                                        var result = JSON.parse(resultSet.rows.item(0).attributes);
+                                        //id isn't included in the database attributes on first save
+                                        result.id = model.id;
+                                        delete options.success;
+                                        success(result, "success", options);
+                                    }
+                                    else {
+                                        error("Record not found");
+                                    }
+                                },
                              function(t, e){
-                                 error(e);
-                             });
+                                    error(e);
+                                });
             });
             
         };
@@ -197,6 +226,7 @@
             var success = options.success || function(){};
             var error = options.error || function(){};
             var that = this;
+            var oldSid;
             
             if(!options.local){
                 var updated_at = new Date();
@@ -212,42 +242,66 @@
 
                 //We don't want to hang around with incorrect keys, so lets set the keys now
                 item.set(newItem, {silent: true});
+
             }
-            else if (item.attributes)
+            else if(item.attributes){
                 newItem = _.clone(item.attributes);
-            else
+            }
+            else {
                 newItem = _.clone(item);
+            }
 
-            if(_.isUndefined(item.deleted))
+            if(_.isUndefined(item.deleted)){
                 item.deleted = false;
-
-            if(_.isUndefined(item.dirty))
+            }
+            if(_.isUndefined(item.dirty)){
                 item.dirty = false;
-                
+            }
             if(options.regenerateId){
                 this.db.transaction(function(t){
                     var sid = item.sid || options.sid || item.id || "new"; //If it has an id assigned already & regenerateId, that's the server id
                     t.executeSql('SELECT id, sid FROM ' + that.name + ' WHERE sid = ?', [sid], function(t, resultSetA){
-                        if(resultSetA .rows.length > 0 && sid != "new"){
+                        if(resultSetA .rows.length > 0 && sid !== "new"){
+                            newItem.id = resultSetA.rows.item(0).id;
                             t.executeSql('UPDATE ' + that.name + ' SET sid = ?, dirty = ?, updated_at = ?, deleted = ?, attributes = ? WHERE id = ?',
                                         [sid, item.dirty, item.get('updated_at'), item.deleted, JSON.stringify(newItem), resultSetA.rows.item(0).id],
                                          function(t, r){
-                                             item.sid = sid;
+                                             if(item.sid !== sid){
+                                                 oldSid = item.sid;
+                                                 item.sid = sid;
+                                                 item.trigger('changedSid', item, oldSid);
+                                             }
                                              newItem.id = resultSetA.rows.item(0).id;
                                              delete options.success;
+
+                                             // Needed so that the collection will update its id index
+                                             item.set('id', newItem.id); 
+                                             
                                              success(newItem, "success", options);
                                          },function(t, e){
                                              error(e);
                                              item.trigger('error', item, false, options);
                                          });
                         } else {
-                            t.executeSql('INSERT INTO '+ that.name +' (sid, dirty, updated_at, deleted, attributes) VALUES (?, ?, ?, ?, ?)',
+                            t.executeSql('INSERT INTO ' + that.name + ' (sid, dirty, updated_at, deleted, attributes) VALUES (?, ?, ?, ?, ?)',
                                          [sid, item.dirty, item.get('updated_at'), item.deleted, JSON.stringify(newItem)],
                                          function(t,resultSet){
                                              
-                                             item.sid = sid;
+                                             if(item.sid !== sid){
+                                                 oldSid = item.sid;
+                                                 item.sid = sid;
+                                                 item.trigger('changedSid', item, oldSid);
+                                             }
+                                             if(!options.local || _.isUndefined(options.local) || sid === "new"){
+                                                 //If this is coming from the server, or it's explicitly new, mark it as dirty
+                                                 item.dirty = true; 
+                                             }
+                                             //Need to set the id to the new id.
                                              newItem.id = resultSet.insertId;
                                              delete options.success; //We are calling the success callback here. This is the end of the road
+                                             
+
+                                             item.set('id', newItem.id); // Needed so that the collection will update its id index
                                              success(newItem, "success", options);
                                              
                                          },
@@ -266,22 +320,25 @@
                 this.db.transaction(function(t){
                     t.executeSql('SELECT id, sid FROM ' + that.name + ' WHERE id = ?', [item.id], function(t, resultSetA){
                         //Need to check if this is the sid in the database so we can signal changedSid
-                        var oldSid;
-                        if(resultSetA.rows.length == 1){
+                        if(resultSetA.rows.length === 1){
                             oldSid = resultSetA.rows.item(0).sid;
                         }
                         t.executeSql('UPDATE '+ that.name +' SET sid = ?, dirty = ?, updated_at = ?, deleted = ?, attributes = ? WHERE id = ?',
                                      [item.sid, item.dirty, item.get('updated_at'), item.deleted, JSON.stringify(newItem), item.id],
                                      function(t,resultSet){
-                                         delete options.success;
-                                         //Calling success callback now. This is the end of the road.
-                                         success(item, newItem, options);
-                                         if(oldSid != item.sid)
-                                             item.trigger('changedSid', item);
+                                        delete options.success;
+                                        //Calling success callback now. This is the end of the road.
+                                        newItem.id = item.id;
+                                        
+                                        if(oldSid !== item.sid){
+                                            item.trigger('changedSid', item, oldSid);
+                                        }  
+
+                                        success(newItem, success, options);
                                      },
                                      function(t, e){
-                                         error(e);
-                                         item.trigger('error', item, false, options);
+                                        error(e);
+                                        item.trigger('error', item, false, options);
                                      });
                     }, function(t, e){
                         error(e);
@@ -312,22 +369,28 @@
                                      var sidMap = {};
                                      for(var x = 0; x < resultSet.rows.length; x++){
                                          var fromJson = JSON.parse(resultSet.rows.item(x).attributes);
-                                         fromJson['id'] = resultSet.rows.item(x).id;
+                                         fromJson.id = resultSet.rows.item(x).id;
                                          jsonResult.push(fromJson);
                                          sidMap[resultSet.rows.item(x).id] = resultSet.rows.item(x).sid;
                                          
                                      }
 
                                      that.collection.once('sync', function(collection, resp, options){
-                                         //We need to set the client sids after the collection has created the models
-                                         collection.each(function(model){
-                                             if(model.sid != sidMap[model.id]){
-                                                 model.sid = sidMap[model.id];
-                                                 model.trigger('changedSid', model);
-                                             }
-                                         });
+                                         //Want to make sure we are capturing the correct event, and not a model event interleaved
+                                         if(collection === that.collection){
+                                           
+                                            //We need to set the client sids after the collection has created the models
+                                            collection.each(function(model){
+                                                if(model.sid !== sidMap[model.id]){
+                                                    var oldSid = model.sid;
+                                                    model.sid = sidMap[model.id];
+                                                    model.trigger('changedSid', model, oldSid);
+                                                }
+                                            });
+                                         }
                                      });
                                      delete options.success;
+
                                      success(jsonResult, "success", options);
                                  },
                                  function(t,e){
@@ -368,10 +431,11 @@
             this.db.readTransaction(function(t){
                 t.executeSql('SELECT COUNT(*) AS c FROM '+ that.name, [],
                              function(t, r) {
-                                 if(r.rows.item(0).c == 0)
+                                 if(r.rows.item(0).c === 0){
                                      trueCallback();
-                                 else
+                                 } else {
                                      falseCallback();
+                                 }
                              });
             });                          
         };
@@ -444,16 +508,20 @@
                     if(replaced)
                         //Replace with local id
                         item[field] = replaced.id;
-                    else
+                    else {
+                        console.log("Could not locate matching local id for key");
                         error(item, "Could not locate matching local id for key");
+
+                    }
                 } else if(method == 'server' && replacedField){
                     var replaced = collection.get(replacedField);
                     if(replaced.sid){
-                        if(replaced.sid == 'new')
+                        if(replaced.sid == 'new'){
+                            console.log("Could not locate matching sid for key");
                             error(item, "Could not locate matching sid for key");
                             //Don't know what to do if there is a reference to a 'new' item.
                             //error("Trying to replace client id with new server id");
-                        else
+                        } else
                             item[field] = replaced.sid;
                     }
                 }
@@ -528,17 +596,23 @@
                                                                          
                                                                          that.storage.collection.reset([], {silent: true});
                                                                          var items = 0;
-                                                                         var resultsLength = response.length;
-                                                                         for(var x = 0; x < resultsLength; x++){
+                                                                         var innerSuccess = function(){
+                                                                                 that.storage.collection.trigger('reset', that.storage.collection, options);
+                                                                                 success(that.storage.collection, response, xhr);
+                                                                         };
+                                                                         innerSuccess = _.after(response.length, innerSuccess);
+                                                                         
+                                                                         for(var x = 0; x < response.length; x++){
                                                                              var item = response[x];
-                                                                             that.storage.collection.create(item, {silent: true, local: true, regenerateId: true,
-                                                                                                                   success: function(){
-                                                                                                                       items++;
-                                                                                                                       if(items == resultsLength){
-                                                                                                                          that.storage.collection.trigger('reset');
-                                                                                                                           success(that.storage.collection, response, xhr); 
-                                                                                                                       }   
-                                                                                                                   }});    
+                                                                             var sid = item.id;
+                                                                             delete item.id;
+                                                                             that.storage.collection.create(item, {silent: true,
+                                                                                                                   local: true,
+                                                                                                                   regenerateId: true,
+                                                                                                                   sid: sid,
+                                                                                                                   success: innerSuccess,
+                                                                                                                   wait: true
+                                                                                                                  });    
                                                                          }
                                                                      },
                                                                      error
@@ -586,7 +660,7 @@
             dependencies.pop(); //Remove "this" from the list
 
             if(dependencies.length > 0){
-                //console.log("dependencies: ", dependencies);
+         
                 success = _.after(dependencies.length, success);
                 _.each(dependencies, function(sync){
                     sync.incremental({
@@ -703,7 +777,7 @@
                                    function(){
                                        var sid = item.id;
                                        delete item.id;
-                                       that.collection.items.create(item, {local: true, success: success, sid: sid});
+                                       that.collection.items.create(item, {local: true, success: success, sid: sid, wait: true});
                                    });
         };
 
@@ -712,7 +786,7 @@
 
             if(new Date(model.get('updated_at')) < (new Date(item.updated_at))){
                 delete item.id;
-                model.save(item, {local: true, success: success});
+                model.save(item, {local: true, success: success, wait: true});
             } else {
                 success(model);
             }
@@ -748,7 +822,9 @@
                         options.error.apply(options, arguments);
                 };
                 var helper = function(){
-                    var pushingItems = that.collection.items.filter(function(item){return item.dirty == true;});
+                    var pushingItems = that.collection.items.filter(function(item){
+                        return item.dirty === true || item.sid === "new";
+                    });
                     success = _.after(pushingItems.length + 1, success); //1 for the deletedItems call
                     _.each(pushingItems,
                            function(element, index, list){
@@ -785,41 +861,52 @@
             var error = options.error || function() {};
             var success = options.success || function() {};
             var oldAttrs = _.clone(item.attributes);
-            var newItem = this.storage.replaceKeyFields(item, 'server', error);
+            var newAttrs = this.storage.replaceKeyFields(item, 'server', error);
             var localId = item.id;
             if(item.sid == 'new'){
                 var method = 'create';
+                
                 delete item.id;
-                delete newItem.id;
+                delete newAttrs.id;
             } else {
                 var method = 'update';
+                
                 item.id = item.sid;
-                newItem.id = item.sid;
+                newAttrs.id = item.sid;
             }
             item.clear({silent: true});
-            item.set(newItem, {silent: true});
-            item.on("request", function(model, xhr, options){
-                //We can set the ids and everything back before the request is made to leave
-                //the object in a reasonable state during asynchronous calls
-                item.set(oldAttrs, {silent: true});
-            });
+            item.set(newAttrs, {silent: true});
+            // item.on("request", function(model, xhr, options){
+            //     console.log("Setting old attrs: ", oldAttrs.id, model.id);
+
+            //     //We can set the ids and everything back before the request is made to leave
+            //     //the object in a reasonable state during asynchronous calls
+            //     item.set(oldAttrs);
+            //     item.id = oldAttrs.id;
+            // });
             
             //Note: This method causes the "request" event to have a model with the server
             //id rather than the client id. Since the id is used to generate the request url
             //you can't set the model id any later than it is without changing all the
             //models or controllers to calculate urls with the server id.
             this.ajax(method, item, {
-                success: function(model, response, opts){
-                    if(method == 'create')
-                        item.sid = model.id;
+                success: function(model, status, opts){
+                    var sid = model.id;
+                    item.sid = sid;
+                    
+
                     model.id = localId;
                     item.id = localId;
                     item.dirty = false;
                     item.save(model, {local: true,
-                                         success: success});
+                                      success: success,
+                                      sid: sid,
+                                      wait: true});
                     
                 }});
+            item.set(oldAttrs);
             
+            item.id = oldAttrs.id;
             
         };
 
@@ -827,11 +914,19 @@
         this.flushItem = function(id, sid, success){
             //console.log("flushItem: ", id, sid, success);
             success = success || function() {};
+            var that = this;
             var model = this.collection.fakeModel(sid);
             this.ajax('delete', model, {
                 success: function(model, response, opts){
-                    this.storage.remove(id);
+                    that.storage.remove(id);
                     success();
+                },
+                error: function(jqXHR, textStatus, errorThrown){
+                    if(errorThrown === 'Not Found'){
+                        //This is just as good as deleting
+                        that.storage.remove(id);
+                        success();
+                    }
                 }
             });
         };
@@ -851,12 +946,12 @@
 
         //Look up items by sid
         this.get = function(sid){
-            return this.items.find(function(item){return item.sid == sid;});
+            return this.items.find(function(item){return item.sid === sid;});
         };
         
         //Destroy items that exist on the client side but not on the server
         this.destroyDiff = function(response){
-            var diff = _.difference(_.without(this.items.map(function(model){return model.sid;}), 'new'),
+            var diff = _.difference(_.without(this.items.map(function(model){return model.sid;}), 'new', undefined),
                                     _.pluck(response, 'id'));
             for(var x = 0; x < diff.length; x++){
                 var sid = diff[x];
