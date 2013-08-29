@@ -56,6 +56,22 @@
         this.autoPush = options.autoPush || false;
         this.support = _.isFunction(window.openDatabase);
         this.sync = new Offline.Sync(collection, this);
+        
+        // We need to update our key fields any time the id changes. Should usually only occur when going from a client id
+        // to a server id.
+        for (var keyName in this.keys) {
+            if(this.keys.hasOwnProperty(keyName)){
+                var keyCollection = this.keys[keyName];
+
+                keyCollection.on("change:id", function (keyModel, value, options) {
+                    var oldId = keyModel.previousAttributes()[keyModel.idAttribute];
+                    var changedModels = collection.filter(function(model){ return model.get(keyName) === oldId; });
+                    changedModels.forEach(function (model) {
+                        model.set(keyName, keyModel.id);
+                    });
+                });
+            }
+        }
 
         if(!Storage.prototype.db){
             Storage.prototype.db = openDatabase('bb-wsql', '1.0', 'Database for backbone.websqloffline', 1 * 1024 * 1024);
@@ -64,7 +80,7 @@
         this.db = Storage.prototype.db;
 
         this.db.transaction(function(t) {
-            t.executeSql("CREATE TABLE IF NOT EXISTS " + name + " (id INTEGER PRIMARY KEY ASC, sid, dirty, updated_at, deleted, attributes)", [],
+            t.executeSql("CREATE TABLE IF NOT EXISTS " + name + " (id PRIMARY KEY ASC, dirty, updated_at, deleted, attributes)", [],
                         function(t, r) {
                             return;
                         },
@@ -111,7 +127,6 @@
         };
 
         this.create = function(model, options) {
-            options.regenerateId = true;
             this.save(model, options);
         },
         
@@ -127,7 +142,7 @@
                 error = options.error || function() {},
                 that = this;
             
-            if(options.local || model.sid === 'new') {
+            if(options.local || this.matchClientId(model.id)) {
                 //Just destroy from database immediately
                 this.remove(model, options);
             } else {
@@ -147,17 +162,19 @@
         };
 
         //This function determines whether an item is awaiting deletion from the client-side
-        //It is an error to call this function with an sid of "new."
-        this.isDeleted = function(sid, trueCallback, falseCallback) {
-            //console.log("isDeleted: ", sid, trueCallback, falseCallback);
-
+        //It is an error to call this function with a client-side id.
+        this.isDeleted = function(id, trueCallback, falseCallback) {
+            //console.log("isDeleted: ", id, trueCallback, falseCallback);
+            falseCallback = falseCallback || function() {};
+            trueCallback = trueCallback || function() {};
             var that = this;
-            if(sid === "new"){
+            if(this.matchClientId(id)){
+                console.log("isDeleted called with client id");
                 return;
             }   
                             
             this.db.readTransaction(function(t) {
-                t.executeSql('SELECT COUNT (*) AS c FROM ' + that.name + ' WHERE sid = ? AND deleted = ?', [sid, true],
+                t.executeSql('SELECT COUNT (*) AS c FROM ' + that.name + ' WHERE id = ? AND deleted = ?', [id, true],
                     function(t, resultSet) {
                         if(resultSet.rows.item(0).c === 0){
                             falseCallback();
@@ -170,17 +187,16 @@
         },
 
 
-        //deletedItems calls its success callback with an array of {id: x, sid: y} objects which
-        //map local ids to server ids.
+        //deletedItems calls its success callback with an array of server ids.
         this.deletedItems = function(success, error){
             //console.log("deletedItems: ", success, error);
             var that = this;
             this.db.readTransaction(function(t) {
-                t.executeSql('SELECT id, sid FROM '+ that.name +' WHERE deleted = ?', [true],
+                t.executeSql('SELECT id FROM '+ that.name +' WHERE deleted = ?', [true],
                             function(t, resultSet){
                                 var rows = [];
                                 for(var x = 0; x < resultSet.rows.length; x++){
-                                    rows.push(resultSet.rows.item(x));
+                                    rows.push(resultSet.rows.item(x).id);
                                 }
                                 success(rows);
                             },
@@ -204,8 +220,6 @@
                              function(t, resultSet){
                                     if(resultSet.rows.length > 0){
                                         var result = JSON.parse(resultSet.rows.item(0).attributes);
-                                        //id isn't included in the database attributes on first save
-                                        result.id = model.id;
                                         delete options.success;
                                         success(result, "success", options);
                                     }
@@ -226,7 +240,7 @@
             var success = options.success || function(){};
             var error = options.error || function(){};
             var that = this;
-            var oldSid;
+            var id;
             
             if(!options.local){
                 var updated_at = new Date();
@@ -236,119 +250,37 @@
 
             var newItem;
             
-            if(options.local){
-                //Should only replace keys to local if this is coming from the server
-                newItem = this.replaceKeyFields(item, 'local', error);
-
-                //We don't want to hang around with incorrect keys, so lets set the keys now
-                item.set(newItem, {silent: true});
-
-            }
-            else if(item.attributes){
-                newItem = _.clone(item.attributes);
-            }
-            else {
-                newItem = _.clone(item);
+            if(!item.attributes) {
+                console.log("Save shouldn't be called with a bare object");
+                return;
             }
 
             if(_.isUndefined(item.deleted)){
+                //new items aren't deleted
                 item.deleted = false;
             }
-            if(_.isUndefined(item.dirty)){
-                item.dirty = false;
+
+            //If this is a new item, let's give it a client id. 
+            id = item.id || this.generateClientId();
+            if (_.isUndefined(item.attributes[item.idAttribute])){
+                item.set(item.idAttribute, id);
             }
-            if(options.regenerateId){
-                this.db.transaction(function(t){
-                    var sid = item.sid || options.sid || item.id || "new"; //If it has an id assigned already & regenerateId, that's the server id
-                    t.executeSql('SELECT id, sid FROM ' + that.name + ' WHERE sid = ?', [sid], function(t, resultSetA){
-                        if(resultSetA .rows.length > 0 && sid !== "new"){
-                            newItem.id = resultSetA.rows.item(0).id;
-                            t.executeSql('UPDATE ' + that.name + ' SET sid = ?, dirty = ?, updated_at = ?, deleted = ?, attributes = ? WHERE id = ?',
-                                        [sid, item.dirty, item.get('updated_at'), item.deleted, JSON.stringify(newItem), resultSetA.rows.item(0).id],
-                                         function(t, r){
-                                             if(item.sid !== sid){
-                                                 oldSid = item.sid;
-                                                 item.sid = sid;
-                                                 item.trigger('changedSid', item, oldSid);
-                                             }
-                                             newItem.id = resultSetA.rows.item(0).id;
-                                             delete options.success;
+            
+            this.db.transaction(function (t) {
+                t.executeSql('INSERT OR REPLACE INTO ' + that.name + ' (id, dirty, updated_at, deleted, attributes) VALUES (?,?,?,?,?)', 
+                             [id, item.dirty, item.get('updated_at'), item.deleted, JSON.stringify(item.attributes)],
+                             function (t, r) {
+                                 //Signal the changed item id, if necessary
+                                 item.set(item.idAttribute, id);
+                                 delete options.success;
+                                 success(newItem, "success", options);
+                             }, function (t, e) {
+                                 error(e);
+                                 item.trigger('error', item, false, options);
+                             }
+               );
+            });
 
-                                             // Needed so that the collection will update its id index
-                                             item.set('id', newItem.id); 
-                                             
-                                             success(newItem, "success", options);
-                                         },function(t, e){
-                                             error(e);
-                                             item.trigger('error', item, false, options);
-                                         });
-                        } else {
-                            t.executeSql('INSERT INTO ' + that.name + ' (sid, dirty, updated_at, deleted, attributes) VALUES (?, ?, ?, ?, ?)',
-                                         [sid, item.dirty, item.get('updated_at'), item.deleted, JSON.stringify(newItem)],
-                                         function(t,resultSet){
-                                             
-                                             if(item.sid !== sid){
-                                                 oldSid = item.sid;
-                                                 item.sid = sid;
-                                                 item.trigger('changedSid', item, oldSid);
-                                             }
-                                             if(!options.local || _.isUndefined(options.local) || sid === "new"){
-                                                 //If this is coming from the server, or it's explicitly new, mark it as dirty
-                                                 item.dirty = true; 
-                                             }
-                                             //Need to set the id to the new id.
-                                             newItem.id = resultSet.insertId;
-                                             delete options.success; //We are calling the success callback here. This is the end of the road
-                                             
-
-                                             item.set('id', newItem.id); // Needed so that the collection will update its id index
-                                             success(newItem, "success", options);
-                                             
-                                         },
-                                         function(t, e){
-                                             error(e);
-                                             item.trigger('error', item, false, options);
-                                         });
-                        }
-                    },function(t, e){
-                        error(e);
-                    });
-                    
-                });
-                    
-            } else {
-                this.db.transaction(function(t){
-                    t.executeSql('SELECT id, sid FROM ' + that.name + ' WHERE id = ?', [item.id], function(t, resultSetA){
-                        //Need to check if this is the sid in the database so we can signal changedSid
-                        if(resultSetA.rows.length === 1){
-                            oldSid = resultSetA.rows.item(0).sid;
-                        }
-                        t.executeSql('UPDATE '+ that.name +' SET sid = ?, dirty = ?, updated_at = ?, deleted = ?, attributes = ? WHERE id = ?',
-                                     [item.sid, item.dirty, item.get('updated_at'), item.deleted, JSON.stringify(newItem), item.id],
-                                     function(t,resultSet){
-                                        delete options.success;
-                                        //Calling success callback now. This is the end of the road.
-                                        newItem.id = item.id;
-                                        
-                                        if(oldSid !== item.sid){
-                                            item.trigger('changedSid', item, oldSid);
-                                        }  
-
-                                        success(newItem, success, options);
-                                     },
-                                     function(t, e){
-                                        error(e);
-                                        item.trigger('error', item, false, options);
-                                     });
-                    }, function(t, e){
-                        error(e);
-                        item.trigger('error', item, false, options);
-                    });
-                    
-                });
-                
-                
-            }
         };
             
             
@@ -363,32 +295,14 @@
             //options.local signals that the user doesn't want a server trip on the fetch
             if(options.local){
                 this.db.readTransaction(function(t){
-                    t.executeSql('SELECT id, sid, attributes FROM '+ that.name +' WHERE deleted = ?', [false],
+                    t.executeSql('SELECT id, attributes FROM '+ that.name +' WHERE deleted = ?', [false],
                                  function(t, resultSet){
                                      var jsonResult = [];
-                                     var sidMap = {};
                                      for(var x = 0; x < resultSet.rows.length; x++){
                                          var fromJson = JSON.parse(resultSet.rows.item(x).attributes);
-                                         fromJson.id = resultSet.rows.item(x).id;
                                          jsonResult.push(fromJson);
-                                         sidMap[resultSet.rows.item(x).id] = resultSet.rows.item(x).sid;
                                          
                                      }
-
-                                     that.collection.once('sync', function(collection, resp, options){
-                                         //Want to make sure we are capturing the correct event, and not a model event interleaved
-                                         if(collection === that.collection){
-                                           
-                                            //We need to set the client sids after the collection has created the models
-                                            collection.each(function(model){
-                                                if(model.sid !== sidMap[model.id]){
-                                                    var oldSid = model.sid;
-                                                    model.sid = sidMap[model.id];
-                                                    model.trigger('changedSid', model, oldSid);
-                                                }
-                                            });
-                                         }
-                                     });
                                      delete options.success;
 
                                      success(jsonResult, "success", options);
@@ -414,8 +328,8 @@
                     function(){
                         //If our store isn't empty, then we are good
                         var newOptions = _.clone(options);
-                        options.local = true;
-                        that.findAll(options);
+                        newOptions.local = true;
+                        that.findAll(newOptions);
                     });
                 
             }
@@ -481,7 +395,7 @@
             });
         };
 
-        
+       
         //Replaces fields in the item with ids from another collection based on this.keys.
         //Returns just the processed attributes object. Method is 'local' or 'server' depending
         //on the direction to which we are converting. 'local' converts to local ids from sids,
@@ -529,6 +443,24 @@
             
             return item;
         };
+
+        this.generateClientId = function(){
+            function s4() {
+                return Math.floor((1 + Math.random()) * 0x10000)
+                       .toString(16)
+                       .substring(1);
+            };
+
+            return 'cid-' + s4() + s4() + '-' + s4() + '-' + s4() + '-' +
+                   s4() + '-' + s4() + s4() + s4();
+        }
+
+        this.matchClientId = function (id) {
+            if(!_.isString(id)){
+                return false;
+            }
+            return id.match(/cid-[0-9a-zA-Z]{8}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{4}-[0-9a-zA-Z]{12}/);
+        }
     };
     Offline.Storage = Storage;
 
@@ -604,12 +536,8 @@
                                                                          
                                                                          for(var x = 0; x < response.length; x++){
                                                                              var item = response[x];
-                                                                             var sid = item.id;
-                                                                             delete item.id;
                                                                              that.storage.collection.create(item, {silent: true,
                                                                                                                    local: true,
-                                                                                                                   regenerateId: true,
-                                                                                                                   sid: sid,
                                                                                                                    success: innerSuccess,
                                                                                                                    wait: true
                                                                                                                   });    
@@ -757,7 +685,7 @@
         
         this.pullItem = function(item, success){
             //console.log("pullItem: ", item, success);
-            var local = this.collection.get(item.id);
+            var local = this.storage.collection.get(item.id);
             if(local)
                 this.updateItem(item, local, success);
             else
@@ -775,9 +703,7 @@
                                        success();
                                    },
                                    function(){
-                                       var sid = item.id;
-                                       delete item.id;
-                                       that.collection.items.create(item, {local: true, success: success, sid: sid, wait: true});
+                                       that.collection.items.create(item, {local: true, success: success, wait: true});
                                    });
         };
 
@@ -785,7 +711,6 @@
             //console.log("updateItem: ", item, success);
 
             if(new Date(model.get('updated_at')) < (new Date(item.updated_at))){
-                delete item.id;
                 model.save(item, {local: true, success: success, wait: true});
             } else {
                 success(model);
@@ -823,7 +748,7 @@
                 };
                 var helper = function(){
                     var pushingItems = that.collection.items.filter(function(item){
-                        return item.dirty === true || item.sid === "new";
+                        return item.dirty === true || that.storage.matchClientId(item.id);
                     });
                     success = _.after(pushingItems.length + 1, success); //1 for the deletedItems call
                     _.each(pushingItems,
@@ -837,7 +762,7 @@
                     that.storage.deletedItems(function(recs){
                         var newSuccess = _.after(recs.length, success); //Yes, that's right, two layers of _.after
                         for(var x = 0; x < recs.length; x++){
-                            that.flushItem(recs[x].id, recs[x].sid, newSuccess);
+                            that.flushItem(recs[x], newSuccess);
                     }
                         
                     });
@@ -861,61 +786,42 @@
             var error = options.error || function() {};
             var success = options.success || function() {};
             var oldAttrs = _.clone(item.attributes);
-            var newAttrs = this.storage.replaceKeyFields(item, 'server', error);
+            var newAttrs = _.clone(oldAttrs);
             var localId = item.id;
-            if(item.sid == 'new'){
+            if(this.storage.matchClientId(item.id)){
                 var method = 'create';
                 
                 delete item.id;
-                delete newAttrs.id;
+                delete newAttrs[item.idAttribute];
             } else {
                 var method = 'update';
-                
-                item.id = item.sid;
-                newAttrs.id = item.sid;
             }
             item.clear({silent: true});
             item.set(newAttrs, {silent: true});
-            // item.on("request", function(model, xhr, options){
-            //     console.log("Setting old attrs: ", oldAttrs.id, model.id);
 
-            //     //We can set the ids and everything back before the request is made to leave
-            //     //the object in a reasonable state during asynchronous calls
-            //     item.set(oldAttrs);
-            //     item.id = oldAttrs.id;
-            // });
-            
-            //Note: This method causes the "request" event to have a model with the server
-            //id rather than the client id. Since the id is used to generate the request url
+            //Note: This method causes the "request" event to have a model with a blank
+            //id rather than the client id if new. Since the id is used to generate the request url
             //you can't set the model id any later than it is without changing all the
-            //models or controllers to calculate urls with the server id.
+            //models or collections to calculate urls differently.
             this.ajax(method, item, {
                 success: function(model, status, opts){
-                    var sid = model.id;
-                    item.sid = sid;
-                    
-
-                    model.id = localId;
                     item.id = localId;
                     item.dirty = false;
                     item.save(model, {local: true,
                                       success: success,
-                                      sid: sid,
                                       wait: true});
                     
                 }});
-            item.set(oldAttrs);
-            
-            item.id = oldAttrs.id;
-            
+            //Restore the attributes, including the id.
+            item.set(oldAttrs, {silent: true});
         };
 
         //Deletes data on the server and removes it from Web SQL
-        this.flushItem = function(id, sid, success){
-            //console.log("flushItem: ", id, sid, success);
+        this.flushItem = function(id, success){
+            //console.log("flushItem: ", id, success);
             success = success || function() {};
             var that = this;
-            var model = this.collection.fakeModel(sid);
+            var model = this.collection.fakeModel(id);
             this.ajax('delete', model, {
                 success: function(model, response, opts){
                     that.storage.remove(id);
@@ -941,22 +847,20 @@
 
         //Dirty client-side objects
         this.dirty = function(){
-            this.items.filter(function(item){return item.dirty == true;});
+            this.items.filter(function(item){return item.dirty === true;});
         };
 
-        //Look up items by sid
-        this.get = function(sid){
-            return this.items.find(function(item){return item.sid === sid;});
-        };
-        
         //Destroy items that exist on the client side but not on the server
         this.destroyDiff = function(response){
-            var diff = _.difference(_.without(this.items.map(function(model){return model.sid;}), 'new', undefined),
+            var that = this;
+            var diff = _.difference(_.filter(this.items.map(function(model){return model.id;}), function (id) {
+                return !that.items.storage.matchClientId(id);
+            }),
                                     _.pluck(response, 'id'));
             for(var x = 0; x < diff.length; x++){
-                var sid = diff[x];
-                if(this.get(sid))
-                    this.get(sid).destroy({local:true});
+                var id = diff[x];
+                if(id)
+                    this.items.get(id).destroy({local:true});
             }
         };
 

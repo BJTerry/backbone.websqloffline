@@ -131,6 +131,7 @@ describe("Storage", function(){
         expect(Offline.Storage).toBeDefined();
     });
 
+
     describe('.destroy', function(){
         it('should call success after deleting', function(){
             var success = jasmine.createSpy("Success Callback");
@@ -298,13 +299,13 @@ describe("Storage", function(){
             runs(function(){
                 newModel = testCollection.create({Name: "Test Model"}, {
                     success: function(model, resp, options){
-                        model.sid = 123;
+                        model.set({id:123}) ;
                         model.save({}, {
                             success: function(model, resp, options){
-                                storage.isDeleted(model.sid, undefined, falseCB);
+                                storage.isDeleted(model.id, trueCB, falseCB);
                                 model.destroy({
                                     success: function(model, resp, options){
-                                        storage.isDeleted(model.sid, trueCB, undefined);
+                                        storage.isDeleted(model.id, trueCB, falseCB);
                                     }
                                 });
                             }
@@ -352,7 +353,7 @@ describe("Storage", function(){
             runs(function(){
                 newModel = testCollection.create({Name: "Test Model"}, {
                     success: function(model, resp, options){
-                        model.sid = 123;
+                        model.set({id: 123});
                         model.save({}, {
                             success: function(model, resp, options){
                                 model.destroy({
@@ -372,7 +373,7 @@ describe("Storage", function(){
             });
 
             runs(function(){
-                expect(success.calls[0].args[0]).toEqual([{id: newModel.id, sid: 123}]);
+                expect(success.calls[0].args[0]).toEqual([123]);
             });
         });
 
@@ -558,54 +559,6 @@ describe("Storage", function(){
 
     });
 
-    describe('.replaceKeyField', function(){
-
-        beforeEach(function(){
-            var sentinel = 0;
-            keyCollection = new KeyCollection();
-            testCollection2 = new TestCollection({key: keyCollection});
-            runs(function(){
-                keyCollection.create({}, {sid: 123, success: function(model){
-                    key1 = model;
-                }});
-                keyCollection.create({}, {sid: 321, success: function(model){
-                    key2 = model;
-                }});
-            });
-
-            waitsFor(function(){
-                if(!(_.isUndefined(window.key1) || (_.isUndefined(window.key2))))
-                    return true;
-                return false;
-            });
-            
-        });
-
-        afterEach(function(){
-            testCollection2.storage.clear();
-            keyCollection.storage.clear();
-            delete keyCollection;
-            delete testCollection2;
-            delete key1;
-            delete key2;
-        });
-        
-
-        it('replaces keys with client-side ids when going to local', function(){
-            var model = new TestModel({key: 123});
-            var result = testCollection2.storage.replaceKeyFields(model, 'local');
-            expect(result.key).toEqual(key1.id);
-        });
-
-        it('replaces keys with server-side ids when going to server', function(){
-            var model = new TestModel({key: key1.id});
-            var result = testCollection2.storage.replaceKeyFields(model, 'server');
-            expect(result.key).toEqual(123);
-        });
-        
-        
-    });
-    
 });
 
 describe("Sync", function(){
@@ -762,7 +715,7 @@ describe("Sync", function(){
             runs(function(){
                 testCollection.create({name: "Test Model"}, {
                     success: function(model, resp, options){
-                        model.sid = 14;
+                        model.set('id', 14);
                         sync.pullItem({id: 14, name: "Test Model 2"});
                         sentinel = true;
                     }
@@ -787,7 +740,7 @@ describe("Sync", function(){
             var sentinel;
             
             runs(function(){
-                testCollection.create({name: "Test Model"}, {
+                testCollection.create({name: "Test Model", id: 143}, {
                     success: function(model, resp, options){
                         model.destroy({
                             success: function(){
@@ -802,8 +755,7 @@ describe("Sync", function(){
                             }
                         });
                     },
-                    local: true,
-                    sid: 143
+                    local: true
                 });
             });
             waitsFor(function(){
@@ -828,7 +780,7 @@ describe("Sync", function(){
             });
 
             runs(function(){
-                expect(newModel.sid).toEqual(1337);
+                expect(newModel.id).toEqual(1337);
             }); 
         });
         
@@ -919,8 +871,7 @@ describe("Sync", function(){
             var id;
             
             runs(function(){
-                testCollection.create({name: "Test Model"}, {
-                    sid: 1337,
+                testCollection.create({name: "Test Model", id: 1337}, {
                     local: true,
                     success: function(model, resp, options){
                         id = model.id;
@@ -938,8 +889,7 @@ describe("Sync", function(){
             });
 
             runs(function(){
-                expect(sync.flushItem.calls[0].args[0]).toEqual(id);
-                expect(sync.flushItem.calls[0].args[1]).toEqual(1337);
+                expect(sync.flushItem.calls[0].args[0]).toEqual(1337);
             });
             
         });
@@ -952,10 +902,10 @@ describe("Sync", function(){
             keyCollection = new KeyCollection();
             testCollection2 = new TestCollection({key: keyCollection});
             runs(function(){
-                keyCollection.create({}, {sid: 123, success: function(model){
+                keyCollection.create({id: 123}, { success: function(model){
                     key1 = model;
                 }});
-                keyCollection.create({}, {sid: 321, success: function(model){
+                keyCollection.create({id: 321}, {success: function(model){
                     key2 = model;
                 }});
             });
@@ -977,6 +927,15 @@ describe("Sync", function(){
             delete key2;
         });
         
+
+
+        it('sets keys when a key model is changed', function () {
+            var keyModel = keyCollection.create({}, {local: true});
+            var model = testCollection2.create({key: keyModel.id}, {local: true});
+            keyModel.set("id", 1337);
+            expect(model.get("key")).toEqual(1337);
+        });
+
         it('sends new items to the server', function(){
             spyOn(Backbone, 'ajaxSync');
             var newModel;
@@ -1006,8 +965,7 @@ describe("Sync", function(){
             var newModel;
 
             runs(function(){
-                testCollection.create({name: "Test Model"}, {
-                    sid: 1337,
+                testCollection.create({name: "Test Model", id: 1337}, {
                     success: function(model, resp, options){
                         newModel = model;
                         sync.pushItem(model);
@@ -1031,8 +989,7 @@ describe("Sync", function(){
             var count = 0;
 
             runs(function(){
-                testCollection.create({name: "Test Model"}, {
-                    sid: 1337,
+                testCollection.create({name: "Test Model", id: 1337}, {
                     success: function(model, resp, options){
                         newModel = model;
                         newModelId = model.id;
@@ -1203,9 +1160,8 @@ describe('Collection', function(){
         it('destroys models that have an sid and aren\'t reflected in a pull response', function(){
             spyOn(storage, 'destroy');
             runs(function(){
-                testCollection.create({name: "Test Model"}, {
+                testCollection.create({name: "Test Model", id: 1000}, {
                     local: true,
-                    sid: 1000,
                     success: function(model, resp, options){
                         newModel = model;
                         storage.sync.collection.destroyDiff([{name: "Test Model 2", id: 1337}]);
